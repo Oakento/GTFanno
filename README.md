@@ -13,5 +13,5 @@ The input GTF file requires chromosome name with "chr" prefix.
 +	`-o`	Optional. Output directory. Default the current working directory.
 + `-k`	Optional. Also include scaffolds.
 +	`-r`	Optional. The radius upstream and downstream the TSS. Default to 300.
-+ `-s`	Optional. The local chromosome size file for calculating intergenic area. If left empty, it will be automatically downloaded from https://github.com/igvteam/igv/tree/maaster/genomes/sizes
++ `-s`	Optional. The local chromosome size file for calculating intergenic area. If left empty, it will be automatically downloaded from https://github.com/igvteam/igv/tree/master/genomes/sizes
 + `-h`	Print this help message.

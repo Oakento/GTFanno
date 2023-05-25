@@ -11,7 +11,6 @@ warn(){
 	printf "\e[33m$*\e[0m\n"
 }
 
-
 usage() {
 	cat <<\END_HELP
    _____ _______ ______                      
@@ -41,6 +40,20 @@ END_HELP
 	exit $1;
 }
 
+check_cmd() {
+	local uninstalled=()
+	for c in bedtools; do
+		if ! command -v $c > /dev/null; then
+			uninstalled+=($c)
+		fi
+	done
+	if [[ ${#uninstalled[@]} -gt 0 ]]; then
+		warn "Required command[s] not found: ${uninstalled[@]}"
+		exit 1
+	fi
+}
+check_cmd
+
 include_scaffold=false
 outdir=$(pwd)
 tss_radius=300
@@ -62,43 +75,15 @@ if [[ -z $gtf_file ]];then
 	usage 1
 fi
 
+regiondir=$outdir/region
 tmpdir=$outdir/.tmp
+
+mkdir -p $regiondir
 mkdir -p $tmpdir
 
-_filename() {
-	local prefix
-	prefix=$(basename $1)
-	echo ${prefix%.*}
-}
-
 if [[ -z $prefix ]];then
-	prefix=$(_filename $gtf_file)
+	prefix=$(echo "$(basename $gtf_file)" | awk -F '.gtf' '{print $1}')
 fi
-
-if head $gtf_file | grep -E "GRCh38|hg38" > /dev/null; then
-	genome=hg38
-elif head $gtf_file | grep -E "GRCh37|hg19" > /dev/null; then
-	genome=hg19
-elif head $gtf_file | grep -E "GRCm39|mm39" > /dev/null; then
-	genome=mm39
-elif head $gtf_file | grep -E "GRCh38|mm10" > /dev/null; then
-	genome=mm10
-fi
-genome_size_url="https://raw.githubusercontent.com/igvteam/igv/master/genomes/sizes/$genome.chrom.sizes"
-
-chr_file=$outdir/$prefix.chr.bed
-tss_file=$outdir/$prefix.tss$tss_radius.bed
-exon_file=$outdir/$prefix.exon_no_tss.bed
-intron_file=$outdir/$prefix.intron.bed
-intergenic_file=$outdir/$prefix.intergenic.bed
-
-#####################################################
-#													#
-#			1) GTF to BED conversion				#
-#													#
-#####################################################
-
-info "Start converting GTF to BED: $(warn $chr_file)"
 
 load_gtf() {
 	if [[ $(file -b ${gtf_file}) == *gzip* ]];then
@@ -107,6 +92,32 @@ load_gtf() {
 		cat ${gtf_file}
 	fi
 }
+
+if load_gtf | head | grep -E "GRCh38|hg38" > /dev/null; then
+	genome=hg38
+elif load_gtf | head | grep -E "GRCh37|hg19" > /dev/null; then
+	genome=hg19
+elif load_gtf | head | grep -E "GRCm39|mm39" > /dev/null; then
+	genome=mm39
+elif load_gtf | head | grep -E "GRCh38|mm10" > /dev/null; then
+	genome=mm10
+fi
+
+genome_size_url="https://raw.githubusercontent.com/igvteam/igv/master/genomes/sizes/$genome.chrom.sizes"
+
+chr_file=$outdir/$prefix.chr.bed
+tss_file=$regiondir/$prefix.tss$tss_radius.bed
+exon_file=$regiondir/$prefix.exon_no_tss.bed
+intron_file=$regiondir/$prefix.intron.bed
+intergenic_file=$regiondir/$prefix.intergenic.bed
+
+#####################################################
+#													#
+#			1) GTF to BED conversion				#
+#													#
+#####################################################
+
+info "Start converting GTF to BED: $(warn $chr_file)"
 
 # row example
 # 1	2	3	4	5	6	7	8	9
@@ -118,7 +129,7 @@ gtf_to_bed() {
 			if (attr[i] ~ /gene_name/) {
 				split(attr[i], gene_name, " ")
 				gsub("\"", "", gene_name[2])
-				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1":"$5":"$7, "0", $7
+				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1"-"$5":"$7, "0", $7
 				break
 			}
 		}
@@ -174,12 +185,20 @@ bedtools_merge_with_genename() {
         print $1, $2, $3, attr[3], $5, $6
     }' | sort_bed | \
 	bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
-	awk -F '\t' -v OFS='\t' '{
-        print $1, $2, $3, $1":"$4":"$2":"$3":"$5, "0", $5
+	awk -F '\t' -v OFS='\t' -v region="$1" '{
+        print $1, $2, $3, $1":"region":"$4":"$2"-"$3":"$5, "0", $5
     }' | sort_bed
 }
 
-get_tss_from_chr $chr_file | bedtools_merge_with_genename > $tss_file
+bedtools_merge_simple() {
+    sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
+	awk -F '\t' -v OFS='\t' -v region="$1" '{
+        print $1, $2, $3, $1":"region":"$2"-"$3":"$4, "0", $4
+    }' | sort_bed
+}
+
+
+get_tss_from_chr $chr_file | bedtools_merge_simple tss > $tss_file
 
 ok "Job finished."
 
@@ -193,7 +212,7 @@ info "Start generate exon (without TSS $tss_radius) annotation: $(warn $exon_fil
 
 exon_tmp=$tmpdir/exon.tmp
 grep "exon" $chr_file > $exon_tmp
-bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_with_genename > $exon_file
+bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_simple exon > $exon_file
 
 ok "Job finished."
 
@@ -205,20 +224,13 @@ ok "Job finished."
 
 info "Start generate intron (without TSS $tss_radius) annotation: $(warn $intron_file)"
 
-bedtools_merge_simple() {
-    sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
-	awk -F '\t' -v OFS='\t' '{
-        print $1, $2, $3, $1":"$2":"$3":"$4, "0", $4
-    }' | sort_bed
-}
-
 exon_tss_tmp=$tmpdir/exon_tss.tmp
 gene_tmp=$tmpdir/gene.tmp
 
 grep "gene" $chr_file > $gene_tmp
-cat $exon_tmp $tss_file | bedtools_merge_simple > $exon_tss_tmp
+cat $exon_tmp $tss_file | bedtools_merge_simple intron > $exon_tss_tmp
 
-bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_with_genename > $intron_file
+bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_simple intron > $intron_file
 
 ok "Job finished."
 
@@ -255,7 +267,7 @@ bedtools complement -i $gene_tss_fwd_tmp -g $genome_size_tmp | \
 bedtools complement -i $gene_tss_rev_tmp -g $genome_size_tmp | \
 	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":-", "0", "-"}' > $intergenic_rev_tmp
 
-cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple > $intergenic_file
+cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple intergenic > $intergenic_file
 
 ok "Job finished."
 
