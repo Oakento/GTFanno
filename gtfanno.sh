@@ -11,7 +11,6 @@ warn(){
 	printf "\e[33m$*\e[0m\n"
 }
 
-
 usage() {
 	cat <<\END_HELP
    _____ _______ ______                      
@@ -41,6 +40,20 @@ END_HELP
 	exit $1;
 }
 
+check_cmd() {
+	local uninstalled=()
+	for c in bedtools; do
+		if ! command -v $c > /dev/null; then
+			uninstalled+=($c)
+		fi
+	done
+	if [[ ${#uninstalled[@]} -gt 0 ]]; then
+		warn "Required command[s] not found: ${uninstalled[@]}"
+		exit 1
+	fi
+}
+check_cmd
+
 include_scaffold=false
 outdir=$(pwd)
 tss_radius=300
@@ -65,25 +78,28 @@ fi
 tmpdir=$outdir/.tmp
 mkdir -p $tmpdir
 
-_filename() {
-	local prefix
-	prefix=$(basename $1)
-	echo ${prefix%.*}
+if [[ -z $prefix ]];then
+	prefix=$(echo "$gtf_file" | awk -F '.gtf' '{print $1}')
+fi
+
+load_gtf() {
+	if [[ $(file -b ${gtf_file}) == *gzip* ]];then
+		zcat ${gtf_file}
+	else
+		cat ${gtf_file}
+	fi
 }
 
-if [[ -z $prefix ]];then
-	prefix=$(_filename $gtf_file)
-fi
-
-if head $gtf_file | grep -E "GRCh38|hg38" > /dev/null; then
+if load_gtf | head | grep -E "GRCh38|hg38" > /dev/null; then
 	genome=hg38
-elif head $gtf_file | grep -E "GRCh37|hg19" > /dev/null; then
+elif load_gtf | head | grep -E "GRCh37|hg19" > /dev/null; then
 	genome=hg19
-elif head $gtf_file | grep -E "GRCm39|mm39" > /dev/null; then
+elif load_gtf | head | grep -E "GRCm39|mm39" > /dev/null; then
 	genome=mm39
-elif head $gtf_file | grep -E "GRCh38|mm10" > /dev/null; then
+elif load_gtf | head | grep -E "GRCh38|mm10" > /dev/null; then
 	genome=mm10
 fi
+
 genome_size_url="https://raw.githubusercontent.com/igvteam/igv/master/genomes/sizes/$genome.chrom.sizes"
 
 chr_file=$outdir/$prefix.chr.bed
@@ -99,14 +115,6 @@ intergenic_file=$outdir/$prefix.intergenic.bed
 #####################################################
 
 info "Start converting GTF to BED: $(warn $chr_file)"
-
-load_gtf() {
-	if [[ $(file -b ${gtf_file}) == *gzip* ]];then
-		zcat ${gtf_file}
-	else
-		cat ${gtf_file}
-	fi
-}
 
 # row example
 # 1	2	3	4	5	6	7	8	9
