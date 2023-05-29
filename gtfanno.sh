@@ -79,7 +79,7 @@ tmpdir=$outdir/.tmp
 mkdir -p $tmpdir
 
 if [[ -z $prefix ]];then
-	prefix=$(echo "$gtf_file" | awk -F '.gtf' '{print $1}')
+	prefix=$(echo "$(basename $gtf_file)" | awk -F '.gtf' '{print $1}')
 fi
 
 load_gtf() {
@@ -126,7 +126,7 @@ gtf_to_bed() {
 			if (attr[i] ~ /gene_name/) {
 				split(attr[i], gene_name, " ")
 				gsub("\"", "", gene_name[2])
-				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1":"$5":"$7, "0", $7
+				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1"-"$5":"$7, "0", $7
 				break
 			}
 		}
@@ -182,12 +182,20 @@ bedtools_merge_with_genename() {
         print $1, $2, $3, attr[3], $5, $6
     }' | sort_bed | \
 	bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
-	awk -F '\t' -v OFS='\t' '{
-        print $1, $2, $3, $1":"$4":"$2":"$3":"$5, "0", $5
+	awk -F '\t' -v OFS='\t' -v region="$1" '{
+        print $1, $2, $3, $1":"region":"$4":"$2"-"$3":"$5, "0", $5
     }' | sort_bed
 }
 
-get_tss_from_chr $chr_file | bedtools_merge_with_genename > $tss_file
+bedtools_merge_simple() {
+    sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
+	awk -F '\t' -v OFS='\t' -v region="$1" '{
+        print $1, $2, $3, $1":"region":"$2"-"$3":"$4, "0", $4
+    }' | sort_bed
+}
+
+
+get_tss_from_chr $chr_file | bedtools_merge_simple tss > $tss_file
 
 ok "Job finished."
 
@@ -201,7 +209,7 @@ info "Start generate exon (without TSS $tss_radius) annotation: $(warn $exon_fil
 
 exon_tmp=$tmpdir/exon.tmp
 grep "exon" $chr_file > $exon_tmp
-bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_with_genename > $exon_file
+bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_simple exon > $exon_file
 
 ok "Job finished."
 
@@ -213,20 +221,13 @@ ok "Job finished."
 
 info "Start generate intron (without TSS $tss_radius) annotation: $(warn $intron_file)"
 
-bedtools_merge_simple() {
-    sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
-	awk -F '\t' -v OFS='\t' '{
-        print $1, $2, $3, $1":"$2":"$3":"$4, "0", $4
-    }' | sort_bed
-}
-
 exon_tss_tmp=$tmpdir/exon_tss.tmp
 gene_tmp=$tmpdir/gene.tmp
 
 grep "gene" $chr_file > $gene_tmp
-cat $exon_tmp $tss_file | bedtools_merge_simple > $exon_tss_tmp
+cat $exon_tmp $tss_file | bedtools_merge_simple intron > $exon_tss_tmp
 
-bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_with_genename > $intron_file
+bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_simple intron > $intron_file
 
 ok "Job finished."
 
@@ -263,7 +264,7 @@ bedtools complement -i $gene_tss_fwd_tmp -g $genome_size_tmp | \
 bedtools complement -i $gene_tss_rev_tmp -g $genome_size_tmp | \
 	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":-", "0", "-"}' > $intergenic_rev_tmp
 
-cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple > $intergenic_file
+cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple intergenic > $intergenic_file
 
 ok "Job finished."
 
