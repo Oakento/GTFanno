@@ -75,7 +75,10 @@ if [[ -z $gtf_file ]];then
 	usage 1
 fi
 
+regiondir=$outdir/region
 tmpdir=$outdir/.tmp
+
+mkdir -p $regiondir
 mkdir -p $tmpdir
 
 if [[ -z $prefix ]];then
@@ -103,10 +106,10 @@ fi
 genome_size_url="https://raw.githubusercontent.com/igvteam/igv/master/genomes/sizes/$genome.chrom.sizes"
 
 chr_file=$outdir/$prefix.chr.bed
-tss_file=$outdir/$prefix.tss$tss_radius.bed
-exon_file=$outdir/$prefix.exon_no_tss.bed
-intron_file=$outdir/$prefix.intron.bed
-intergenic_file=$outdir/$prefix.intergenic.bed
+tss_file=$regiondir/$prefix.tss$tss_radius.bed
+exon_file=$regiondir/$prefix.exon_no_tss.bed
+intron_file=$regiondir/$prefix.intron.bed
+intergenic_file=$regiondir/$prefix.intergenic.bed
 
 #####################################################
 #													#
