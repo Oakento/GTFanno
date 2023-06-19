@@ -76,9 +76,11 @@ if [[ -z $gtf_file ]];then
 fi
 
 regiondir=$outdir/region
+extradir=$outdir/extra
 tmpdir=$outdir/.tmp
 
 mkdir -p $regiondir
+mkdir -p $extradir
 mkdir -p $tmpdir
 
 if [[ -z $prefix ]];then
@@ -110,6 +112,8 @@ tss_file=$regiondir/$prefix.tss$tss_radius.bed
 exon_file=$regiondir/$prefix.exon_no_tss.bed
 intron_file=$regiondir/$prefix.intron.bed
 intergenic_file=$regiondir/$prefix.intergenic.bed
+three_utr_file=$extradir/$prefix.3utr.bed
+five_utr_file=$extradir/$prefix.5utr.bed
 
 #####################################################
 #													#
@@ -176,7 +180,7 @@ get_tss_from_chr() {
 		} else {
 			print $1, $3-r, $3+r, $4, $5, $6
 		}
-	}' $1
+	}'
 }
 
 bedtools_merge_with_genename() {
@@ -198,7 +202,7 @@ bedtools_merge_simple() {
 }
 
 
-get_tss_from_chr $chr_file | bedtools_merge_simple tss > $tss_file
+grep transcript $chr_file | get_tss_from_chr | bedtools_merge_simple tss > $tss_file
 
 ok "Job finished."
 
@@ -268,6 +272,50 @@ bedtools complement -i $gene_tss_rev_tmp -g $genome_size_tmp | \
 	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":-", "0", "-"}' > $intergenic_rev_tmp
 
 cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple intergenic > $intergenic_file
+
+ok "Job finished."
+
+#####################################################
+#													#
+#				6) UTRs						#
+#													#
+#####################################################
+
+info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file; $five_utr_file)"
+utr_tmp=$tmpdir/utr.tmp
+
+load_gtf $gtf_file | grep chr | awk '$3 == "UTR" || $3 == "CDS"' | python3 -c '''
+import sys
+
+gtf = dict(CDS={}, UTR={})
+
+for line in sys.stdin:
+    content = line.strip().split("\t")
+    feature_type = content[2]
+    transcript_id = content[8].split(";")[1].split(" \"")[1].replace("\"", "")
+
+    if gtf[feature_type].get(transcript_id) is None:
+        gtf[feature_type][transcript_id] = []
+    gtf[feature_type][transcript_id].append([content[i] for i in [0, 2, 3, 4, 6]])
+
+for k in gtf["UTR"].keys():
+    for u in gtf["UTR"][k]:
+        if gtf["CDS"][k][0][4] == "+":
+            utr_type = "three_prime_utr" if int(u[2]) > max([int(c[3]) for c in gtf["CDS"][k]]) else "five_prime_utr"
+        else:
+            utr_type = "three_prime_utr" if int(u[3]) < min([int(c[2]) for c in gtf["CDS"][k]]) else "five_prime_utr"
+
+        print("{}\t{}\t{}\t{}\t{}\t{}".format(
+            u[0],
+            int(u[2]) - 1,
+            u[3],
+            "{}:{}:{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][4]),
+            0,
+            gtf["UTR"][k][0][4]
+        ))
+''' > $utr_tmp
+grep three_prime_utr $utr_tmp > $three_utr_file
+grep five_prime_utr $utr_tmp > $five_utr_file
 
 ok "Job finished."
 
