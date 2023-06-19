@@ -281,7 +281,7 @@ ok "Job finished."
 #													#
 #####################################################
 
-info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file; $five_utr_file)"
+info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file $five_utr_file)"
 utr_tmp=$tmpdir/utr.tmp
 
 load_gtf $gtf_file | grep chr | awk '$3 == "UTR" || $3 == "CDS"' | python3 -c '''
