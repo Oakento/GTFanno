@@ -133,7 +133,7 @@ gtf_to_bed() {
 			if (attr[i] ~ /gene_name/) {
 				split(attr[i], gene_name, " ")
 				gsub("\"", "", gene_name[2])
-				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1"-"$5":"$7, "0", $7
+				print $1, $4-1, $5, $1":"$4-1"-"$5":"$3":"gene_name[2]":"$7, "0", $7
 				break
 			}
 		}
@@ -186,18 +186,18 @@ get_tss_from_chr() {
 bedtools_merge_with_genename() {
     awk -F '\t' -v OFS='\t' '{
         split($4, attr, ":")
-        print $1, $2, $3, attr[3], $5, $6
+        print $1, $2, $3, attr[5], $5, $6
     }' | sort_bed | \
 	bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
 	awk -F '\t' -v OFS='\t' -v region="$1" '{
-        print $1, $2, $3, $1":"region":"$4":"$2"-"$3":"$5, "0", $5
+        print $1, $2, $3, $1":"$2"-"$3":"region":"$4":"$5, "0", $5
     }' | sort_bed
 }
 
 bedtools_merge_simple() {
     sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
 	awk -F '\t' -v OFS='\t' -v region="$1" '{
-        print $1, $2, $3, $1":"region":"$2"-"$3":"$4, "0", $4
+        print $1, $2, $3, $1":"$2"-"$3":"region":"$4, "0", $4
     }' | sort_bed
 }
 
@@ -232,7 +232,7 @@ exon_tss_tmp=$tmpdir/exon_tss.tmp
 gene_tmp=$tmpdir/gene.tmp
 
 grep "gene" $chr_file > $gene_tmp
-cat $exon_tmp $tss_file | bedtools_merge_simple intron > $exon_tss_tmp
+cat $exon_tmp $tss_file | bedtools_merge_simple exontss > $exon_tss_tmp
 
 bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_simple intron > $intron_file
 
@@ -267,9 +267,9 @@ cat $gene_tmp $tss_file | awk -F '\t' -v OFS='\t' '{if ($6 == "-") {print $0}}' 
 	bedtools_merge_simple > $gene_tss_rev_tmp
 
 bedtools complement -i $gene_tss_fwd_tmp -g $genome_size_tmp | \
-	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":+", "0", "+"}' > $intergenic_fwd_tmp
+	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2"-"$3":+", "0", "+"}' > $intergenic_fwd_tmp
 bedtools complement -i $gene_tss_rev_tmp -g $genome_size_tmp | \
-	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":-", "0", "-"}' > $intergenic_rev_tmp
+	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2"-"$3":-", "0", "-"}' > $intergenic_rev_tmp
 
 cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple intergenic > $intergenic_file
 
@@ -309,7 +309,7 @@ for k in gtf["UTR"].keys():
             u[0],
             int(u[2]) - 1,
             u[3],
-            "{}:{}:{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][4]),
+            "{}:{}-{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][4]),
             0,
             gtf["UTR"][k][0][4]
         ))
