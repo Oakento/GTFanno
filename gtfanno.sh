@@ -76,9 +76,11 @@ if [[ -z $gtf_file ]];then
 fi
 
 regiondir=$outdir/region
+extradir=$outdir/extra
 tmpdir=$outdir/.tmp
 
 mkdir -p $regiondir
+mkdir -p $extradir
 mkdir -p $tmpdir
 
 if [[ -z $prefix ]];then
@@ -110,6 +112,8 @@ tss_file=$regiondir/$prefix.tss$tss_radius.bed
 exon_file=$regiondir/$prefix.exon_no_tss.bed
 intron_file=$regiondir/$prefix.intron.bed
 intergenic_file=$regiondir/$prefix.intergenic.bed
+three_utr_file=$extradir/$prefix.3utr.bed
+five_utr_file=$extradir/$prefix.5utr.bed
 
 #####################################################
 #													#
@@ -129,7 +133,7 @@ gtf_to_bed() {
 			if (attr[i] ~ /gene_name/) {
 				split(attr[i], gene_name, " ")
 				gsub("\"", "", gene_name[2])
-				print $1, $4-1, $5, $1":"$3":"gene_name[2]":"$4-1"-"$5":"$7, "0", $7
+				print $1, $4-1, $5, $1":"$4-1"-"$5":"$3":"gene_name[2]":"$7, "0", $7
 				break
 			}
 		}
@@ -176,29 +180,26 @@ get_tss_from_chr() {
 		} else {
 			print $1, $3-r, $3+r, $4, $5, $6
 		}
-	}' $1
+	}'
 }
 
 bedtools_merge_with_genename() {
-    awk -F '\t' -v OFS='\t' '{
-        split($4, attr, ":")
-        print $1, $2, $3, attr[3], $5, $6
-    }' | sort_bed | \
-	bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
+    sort_bed | bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
 	awk -F '\t' -v OFS='\t' -v region="$1" '{
-        print $1, $2, $3, $1":"region":"$4":"$2"-"$3":"$5, "0", $5
+		split($4, name, ":")
+        print $1, $2, $3, $1":"$2"-"$3":"region":"name[4]":"$5, "0", $5
     }' | sort_bed
 }
 
 bedtools_merge_simple() {
     sort_bed | bedtools merge -s -c 6 -o distinct -i stdin | \
 	awk -F '\t' -v OFS='\t' -v region="$1" '{
-        print $1, $2, $3, $1":"region":"$2"-"$3":"$4, "0", $4
+        print $1, $2, $3, $1":"$2"-"$3":"region":"$4, "0", $4
     }' | sort_bed
 }
 
 
-get_tss_from_chr $chr_file | bedtools_merge_simple tss > $tss_file
+grep transcript $chr_file | get_tss_from_chr | bedtools_merge_with_genename tss > $tss_file
 
 ok "Job finished."
 
@@ -212,7 +213,7 @@ info "Start generate exon (without TSS $tss_radius) annotation: $(warn $exon_fil
 
 exon_tmp=$tmpdir/exon.tmp
 grep "exon" $chr_file > $exon_tmp
-bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_simple exon > $exon_file
+bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_with_genename exon > $exon_file
 
 ok "Job finished."
 
@@ -228,9 +229,9 @@ exon_tss_tmp=$tmpdir/exon_tss.tmp
 gene_tmp=$tmpdir/gene.tmp
 
 grep "gene" $chr_file > $gene_tmp
-cat $exon_tmp $tss_file | bedtools_merge_simple intron > $exon_tss_tmp
+cat $exon_tmp $tss_file | bedtools_merge_simple exontss > $exon_tss_tmp
 
-bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_simple intron > $intron_file
+bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_with_genename intron > $intron_file
 
 ok "Job finished."
 
@@ -263,11 +264,64 @@ cat $gene_tmp $tss_file | awk -F '\t' -v OFS='\t' '{if ($6 == "-") {print $0}}' 
 	bedtools_merge_simple > $gene_tss_rev_tmp
 
 bedtools complement -i $gene_tss_fwd_tmp -g $genome_size_tmp | \
-	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":+", "0", "+"}' > $intergenic_fwd_tmp
+	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2"-"$3":+", "0", "+"}' > $intergenic_fwd_tmp
 bedtools complement -i $gene_tss_rev_tmp -g $genome_size_tmp | \
-	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2":"$3":-", "0", "-"}' > $intergenic_rev_tmp
+	awk -F '\t' -v OFS='\t' '{print $1, $2, $3, $1":"$2"-"$3":-", "0", "-"}' > $intergenic_rev_tmp
 
 cat $intergenic_fwd_tmp $intergenic_rev_tmp | bedtools_merge_simple intergenic > $intergenic_file
+
+ok "Job finished."
+
+#####################################################
+#													#
+#				6) UTRs						#
+#													#
+#####################################################
+
+info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file $five_utr_file)"
+utr_tmp=$tmpdir/utr.tmp
+
+load_gtf $gtf_file | grep chr | awk '$3 == "UTR" || $3 == "CDS"' | python3 -c '''
+import sys
+
+gtf = dict(CDS={}, UTR={})
+
+for line in sys.stdin:
+    content = line.strip().split("\t")
+    feature_type = content[2]
+    transcript_id = ""
+    gene_name = ""
+    for field in content[8].strip(";").split(";"):
+        k, v = field.strip().split(" ")
+        if k == "transcript_id":
+            transcript_id = v.replace("\"", "")
+        elif k == "gene_name":
+            gene_name = v.replace("\"", "")
+            break
+
+    if gtf[feature_type].get(transcript_id) is None:
+        gtf[feature_type][transcript_id] = []
+    gtf[feature_type][transcript_id].append([content[i] for i in [0, 2, 3, 4, 6]] + [gene_name])
+
+for k in gtf["UTR"].keys():
+    for u in gtf["UTR"][k]:
+        if gtf["CDS"][k][0][4] == "+":
+            utr_type = "three_prime_utr" if int(u[2]) > max([int(c[3]) for c in gtf["CDS"][k]]) else "five_prime_utr"
+        else:
+            utr_type = "three_prime_utr" if int(u[3]) < min([int(c[2]) for c in gtf["CDS"][k]]) else "five_prime_utr"
+
+        print("{}\t{}\t{}\t{}\t{}\t{}".format(
+            u[0],
+            int(u[2]) - 1,
+            u[3],
+            "{}:{}-{}:{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][5], gtf["UTR"][k][0][4]),
+            0,
+            gtf["UTR"][k][0][4]
+        ))
+''' > $utr_tmp
+grep three_prime_utr $utr_tmp > $three_utr_file
+grep five_prime_utr $utr_tmp > $five_utr_file
+#bedtools subtract -s -a $three_utr_file  -b $tss_file | sort_bed | bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{split($4, name, ":"); print $1, $2, $3, $1":"$2"-"$3":3utr:"name[5]":"$5, "0", $5}' > $extradir/v43.3utr_no_tss.bed
 
 ok "Job finished."
 
