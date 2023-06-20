@@ -184,13 +184,10 @@ get_tss_from_chr() {
 }
 
 bedtools_merge_with_genename() {
-    awk -F '\t' -v OFS='\t' '{
-        split($4, attr, ":")
-        print $1, $2, $3, attr[5], $5, $6
-    }' | sort_bed | \
-	bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
+    sort_bed | bedtools merge -s -c 4,6 -o distinct,distinct -i stdin | \
 	awk -F '\t' -v OFS='\t' -v region="$1" '{
-        print $1, $2, $3, $1":"$2"-"$3":"region":"$4":"$5, "0", $5
+		split($4, name, ":")
+        print $1, $2, $3, $1":"$2"-"$3":"region":"name[4]":"$5, "0", $5
     }' | sort_bed
 }
 
@@ -202,7 +199,7 @@ bedtools_merge_simple() {
 }
 
 
-grep transcript $chr_file | get_tss_from_chr | bedtools_merge_simple tss > $tss_file
+grep transcript $chr_file | get_tss_from_chr | bedtools_merge_with_genename tss > $tss_file
 
 ok "Job finished."
 
@@ -216,7 +213,7 @@ info "Start generate exon (without TSS $tss_radius) annotation: $(warn $exon_fil
 
 exon_tmp=$tmpdir/exon.tmp
 grep "exon" $chr_file > $exon_tmp
-bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_simple exon > $exon_file
+bedtools subtract -s -a $exon_tmp -b $tss_file | bedtools_merge_with_genename exon > $exon_file
 
 ok "Job finished."
 
@@ -234,7 +231,7 @@ gene_tmp=$tmpdir/gene.tmp
 grep "gene" $chr_file > $gene_tmp
 cat $exon_tmp $tss_file | bedtools_merge_simple exontss > $exon_tss_tmp
 
-bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_simple intron > $intron_file
+bedtools subtract -s -a $gene_tmp -b $exon_tss_tmp | bedtools_merge_with_genename intron > $intron_file
 
 ok "Job finished."
 
@@ -292,11 +289,19 @@ gtf = dict(CDS={}, UTR={})
 for line in sys.stdin:
     content = line.strip().split("\t")
     feature_type = content[2]
-    transcript_id = content[8].split(";")[1].split(" \"")[1].replace("\"", "")
+    transcript_id = ""
+    gene_name = ""
+    for field in content[8].strip(";").split(";"):
+        k, v = field.strip().split(" ")
+        if k == "transcript_id":
+            transcript_id = v.replace("\"", "")
+        elif k == "gene_name":
+            gene_name = v.replace("\"", "")
+            break
 
     if gtf[feature_type].get(transcript_id) is None:
         gtf[feature_type][transcript_id] = []
-    gtf[feature_type][transcript_id].append([content[i] for i in [0, 2, 3, 4, 6]])
+    gtf[feature_type][transcript_id].append([content[i] for i in [0, 2, 3, 4, 6]] + [gene_name])
 
 for k in gtf["UTR"].keys():
     for u in gtf["UTR"][k]:
@@ -309,13 +314,14 @@ for k in gtf["UTR"].keys():
             u[0],
             int(u[2]) - 1,
             u[3],
-            "{}:{}-{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][4]),
+            "{}:{}-{}:{}:{}:{}:{}".format(u[0], str(int(u[2]) - 1), u[3], utr_type, k, gtf["UTR"][k][0][5], gtf["UTR"][k][0][4]),
             0,
             gtf["UTR"][k][0][4]
         ))
 ''' > $utr_tmp
 grep three_prime_utr $utr_tmp > $three_utr_file
 grep five_prime_utr $utr_tmp > $five_utr_file
+#bedtools subtract -s -a $three_utr_file  -b $tss_file | sort_bed | bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{split($4, name, ":"); print $1, $2, $3, $1":"$2"-"$3":3utr:"name[5]":"$5, "0", $5}' > $extradir/v43.3utr_no_tss.bed
 
 ok "Job finished."
 
