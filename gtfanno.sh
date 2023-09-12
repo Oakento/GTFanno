@@ -2,13 +2,13 @@
 
 
 info(){
-	printf "\e[44m$*\e[0m\n"
+	printf "\e[44m%s\e[0m\n" "$*"
 }
 ok(){
-	printf "\e[42m$*\e[0m\n"
+	printf "\e[42m%s\e[0m\n" "$*"
 }
 warn(){
-	printf "\e[33m$*\e[0m\n"
+	printf "\e[33m%s\e[0m\n" "$*"
 }
 
 usage() {
@@ -37,18 +37,18 @@ Parameters:
 	-h	Print this help message.
 
 END_HELP
-	exit $1;
+	exit "$1";
 }
 
 check_cmd() {
 	local uninstalled=()
 	for c in bedtools; do
 		if ! command -v $c > /dev/null; then
-			uninstalled+=($c)
+			uninstalled+=("$c")
 		fi
 	done
 	if [[ ${#uninstalled[@]} -gt 0 ]]; then
-		warn "Required command[s] not found: ${uninstalled[@]}"
+		warn "Required command[s] not found:" "${uninstalled[@]}"
 		exit 1
 	fi
 }
@@ -58,16 +58,16 @@ include_scaffold=false
 outdir=$(pwd)
 tss_radius=300
 
-while getopts f:p:o:kr:s:h opt
-do
+while getopts f:p:o:kr:s:h opt; do
 case ${opt} in
-f) gtf_file=${OPTARG};;
-p) prefix=${OPTARG};;
-o) outdir=${OPTARG};;
-k) include_scaffold=true;;
-r) tss_radius=${OPTARG};;
-s) size_file=${OPTARG};;
-h) usage 0;;
+	f) gtf_file=${OPTARG};;
+	p) prefix=${OPTARG};;
+	o) outdir=${OPTARG};;
+	k) include_scaffold=true;;
+	r) tss_radius=${OPTARG};;
+	s) size_file=${OPTARG};;
+	h) usage 0;;
+	*)
 esac
 done
 
@@ -79,19 +79,23 @@ regiondir=$outdir/region
 extradir=$outdir/extra
 tmpdir=$outdir/.tmp
 
-mkdir -p $regiondir
-mkdir -p $extradir
-mkdir -p $tmpdir
+mkdir -p "$regiondir"
+mkdir -p "$extradir"
+mkdir -p "$tmpdir"
 
 if [[ -z $prefix ]];then
-	prefix=$(echo "$(basename $gtf_file)" | awk -F '.gtf' '{print $1}')
+	prefix=$(basename "$gtf_file" | awk -F '.gtf' '{print $1}')
 fi
 
 load_gtf() {
-	if [[ $(file -b ${gtf_file}) == *gzip* ]];then
-		zcat ${gtf_file}
+	if [[ $(file -b "$gtf_file") == *gzip* ]];then
+		if [ "$(uname)" = "Linux" ]; then
+			zcat "$gtf_file"
+		elif [ "$(uname)" = "Darwin" ]; then
+			gzcat "$gtf_file"
+		fi
 	else
-		cat ${gtf_file}
+		cat "$gtf_file"
 	fi
 }
 
@@ -113,7 +117,11 @@ exon_file=$regiondir/$prefix.exon_no_tss.bed
 intron_file=$regiondir/$prefix.intron.bed
 intergenic_file=$regiondir/$prefix.intergenic.bed
 three_utr_file=$extradir/$prefix.3utr.bed
+three_utr_notss_file=$extradir/$prefix.3utr_no_tss.bed
 five_utr_file=$extradir/$prefix.5utr.bed
+five_utr_notss_file=$extradir/$prefix.5utr_no_tss.bed
+cds_file=$extradir/$prefix.cds.bed
+cds_notss_file=$extradir/$prefix.cds_no_tss.bed
 
 #####################################################
 #													#
@@ -141,8 +149,7 @@ gtf_to_bed() {
 }
 
 filter_scaffold() {
-	if $include_scaffold
-	then
+	if $include_scaffold; then
 		grep ""
 	else
 		grep -E '^(chr[0-9]+|[0-9]+|chr[XYM])'
@@ -155,14 +162,14 @@ sort_bed() {
 			print $0, "chrZ"
 		else
 			print $0, $1
-	}' | sort -k7,7V -k2,2n -k3,3n | awk -F '\t' -v OFS='\t' '{
+	}' | sort -S1G -k7,7V -k2,2n -k3,3n | awk -F '\t' -v OFS='\t' '{
 		$NF=""
 		sub(/\t$/, "")
 		print $0
 	}'
 }
 
-load_gtf $gtf_file | gtf_to_bed | filter_scaffold | sort_bed | uniq > $chr_file
+load_gtf "$gtf_file" | gtf_to_bed | filter_scaffold | sort_bed | uniq > $chr_file
 ok "Job finished"
 
 #####################################################
@@ -199,7 +206,7 @@ bedtools_merge_simple() {
 }
 
 
-grep transcript $chr_file | get_tss_from_chr | bedtools_merge_with_genename tss > $tss_file
+grep transcript "$chr_file" | get_tss_from_chr | bedtools_merge_with_genename tss > $tss_file
 
 ok "Job finished."
 
@@ -278,7 +285,7 @@ ok "Job finished."
 #													#
 #####################################################
 
-info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file $five_utr_file)"
+info "Start generate 3'UTR and 5'UTR annotation: $(warn $three_utr_file $three_utr_notss_file $five_utr_file $five_utr_notss_file)"
 utr_tmp=$tmpdir/utr.tmp
 
 load_gtf $gtf_file | grep chr | awk '$3 == "UTR" || $3 == "CDS"' | python3 -c '''
@@ -319,16 +326,47 @@ for k in gtf["UTR"].keys():
             gtf["UTR"][k][0][4]
         ))
 ''' > $utr_tmp
-grep three_prime_utr $utr_tmp > $three_utr_file
+
 grep five_prime_utr $utr_tmp > $five_utr_file
-#bedtools subtract -s -a $three_utr_file  -b $tss_file | sort_bed | bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{split($4, name, ":"); print $1, $2, $3, $1":"$2"-"$3":3utr:"name[5]":"$5, "0", $5}' > $extradir/v43.3utr_no_tss.bed
+bedtools subtract -s -a $five_utr_file -b $tss_file | sort_bed |\
+	bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{
+		split($4, name, ":"); 
+		print $1, $2, $3, $1":"$2"-"$3":3utr:"name[5]":"$5, "0", $5
+	}' > $five_utr_notss_file
+
+grep three_prime_utr $utr_tmp > $three_utr_file
+bedtools subtract -s -a $three_utr_file -b $tss_file | sort_bed |\
+	bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{
+		split($4, name, ":"); 
+		print $1, $2, $3, $1":"$2"-"$3":3utr:"name[5]":"$5, "0", $5
+	}' > $three_utr_notss_file
+
 
 ok "Job finished."
 
+
 #####################################################
 #													#
-#					6) clean						#
+#					7) CDS							#
 #													#
 #####################################################
 
-rm -rf $tmpdir
+info "Start generate CDS annotation: $(warn $cds_file $cds_notss_file)"
+
+load_gtf $gtf_file | filter_scaffold | awk '$3 == "CDS"' | gtf_to_bed | sort_bed | uniq > $cds_file
+bedtools subtract -s -a $cds_file  -b $tss_file | sort_bed |\
+	bedtools merge -s -i stdin -c 4,6 -o distinct,distinct | awk -F '\t' -v OFS='\t' '{
+		split($4, name, ":"); 
+		print $1, $2, $3, $1":"$2"-"$3":cds:"name[4]":"$5, "0", $5
+	}' > $cds_notss_file
+
+ok "Job finished."
+
+
+#####################################################
+#													#
+#					8) clean						#
+#													#
+#####################################################
+
+rm -rf "$tmpdir"
